@@ -15,8 +15,13 @@ class CheckIn(Base):
     __tablename__ = "checkins"
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"))
-    timestamp = Column(DateTime, default=datetime.datetime.utcnow)
+    
+    # Исправлено под Python 3.14 (используем правильную временную зону UTC)
+    timestamp = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc))
+    
     latitude = Column(Float, nullable=False)
     longitude = Column(Float, nullable=False)
     is_valid = Column(Boolean, default=False)
+    verification_method = Column(String, default="gps_and_qr")  # Способ проверки
+    
     employee = relationship("User", back_populates="checkins")
