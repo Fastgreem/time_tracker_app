@@ -1,29 +1,30 @@
 import warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-
 import flet as ft
 import requests
 
-# URL нашего запущенного локально FastAPI бэкенда
-SERVER_URL = "http://127.0.0"
+# Пробуем использовать 'localhost' вместо '127.0.0.1'
+SERVER_URL = "http://localhost:8000/api/checkin"
 
 def main(page: ft.Page):
-    # Настройки окна/экрана приложения
     page.title = "Учет времени"
     page.vertical_alignment = ft.MainAxisAlignment.CENTER
     page.horizontal_alignment = ft.CrossAxisAlignment.CENTER
     page.theme_mode = ft.ThemeMode.LIGHT
     
-    # Текстовое поле для вывода статуса ответов от сервера
-    status_text = ft.Text(value="Нажмите кнопку, чтобы отметиться на работе", size=16, text_align=ft.TextAlign.CENTER)
+    status_text = ft.Text(
+        value="Нажмите кнопку, чтобы отметиться на работе", 
+        size=16, 
+        text_align=ft.TextAlign.CENTER
+    )
 
-    # Функция, которая срабатывает при нажатии на кнопку
     def on_checkin_click(e):
         status_text.value = "Отправка данных на сервер..."
+        status_text.color = ft.colors.BLACK
         page.update()
         
-        # Симулируем ID сотрудника и координаты (например, центр Москвы)
+        # Передаем базовые параметры
         payload = {
             "user_id": 1,
             "lat": 55.7558,
@@ -31,24 +32,29 @@ def main(page: ft.Page):
         }
         
         try:
-            # Отправляем POST запрос на наш FastAPI сервер
+            # Отправляем POST-запрос на сервер
             response = requests.post(SERVER_URL, params=payload, timeout=5)
             
             if response.status_code == 200:
                 data = response.json()
-                status_text.value = f"🎉 {data['message']}\nID чекина: {data['checkin_id']}"
+                status_text.value = f"🎉 {data['message']}\nID: {data['checkin_id']}"
                 status_text.color = ft.colors.GREEN_700
             else:
-                status_text.value = f"❌ Ошибка сервера: {response.status_code}"
+                # Если сервер вернул ошибку (например, 400 из-за GPS)
+                try:
+                    error_detail = response.json().get("detail", "Неизвестная ошибка")
+                except:
+                    error_detail = response.text
+                status_text.value = f"❌ Ошибка сервера ({response.status_code}):\n{error_detail}"
                 status_text.color = ft.colors.RED_700
                 
-        except requests.exceptions.ConnectionError:
-            status_text.value = "❌ Не удалось подключиться к серверу. Убедитесь, что FastAPI бэкенд запущен!"
+        except requests.exceptions.ConnectionError as err:
+            # Выводим точную техническую причину, почему сеть заблокирована
+            status_text.value = f"❌ Ошибка сети!\nСервер не ответил.\nТехнический лог: {str(err)[:60]}..."
             status_text.color = ft.colors.RED_700
             
         page.update()
 
-    # Добавляем элементы интерфейса на экран
     page.add(
         ft.Container(
             content=ft.Column(
@@ -75,6 +81,5 @@ def main(page: ft.Page):
         )
     )
 
-# Запуск Flet приложения
 if __name__ == "__main__":
     ft.app(target=main)
