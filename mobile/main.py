@@ -27,7 +27,7 @@ def main(page: ft.Page):
         # Передаем базовые параметры
         payload = {
             "user_id": 1,
-            "lat": 55.7558,
+            "lat": 55.7600,
             "lon": 37.6173
         }
         
