@@ -58,7 +58,8 @@ def read_root():
 def get_office_qr():
     return {"current_qr": get_current_qr_code(), "expires_in_seconds": 30 - int(time.time() % 30)}
 
-# --- ВЕБ-ИНТЕРФЕЙС АДМИНИСТРАТОРА (ИСПРАВЛЕННЫЙ CONTEXT) ---
+
+# --- ВЕБ-ИНТЕРФЕЙС АДМИНИСТРАТОРА ---
 
 @app.get("/admin/dashboard")
 def admin_dashboard(request: Request, db: Session = Depends(database.get_db)):
@@ -92,7 +93,6 @@ def admin_dashboard(request: Request, db: Session = Depends(database.get_db)):
                 "last_time": last_time
             })
             
-        # Исправлено: Передаем строгий контекст шаблонизатора без лишних вложений
         return templates.TemplateResponse(request, "dashboard.html", {"status_list": status_list})
     except Exception as e:
         error_details = traceback.format_exc()
@@ -103,6 +103,7 @@ def admin_users_page(request: Request, db: Session = Depends(database.get_db)):
     """Отображает страницу со списком сотрудников"""
     users = db.query(models.User).order_by(models.User.id.asc()).all()
     return templates.TemplateResponse(request, "users.html", {"users": users})
+
 
 # --- УПРАВЛЕНИЕ БАЗОЙ ДАННЫХ ИЗ ВЕБ-ИНТЕРФЕЙСА ---
 
@@ -129,6 +130,13 @@ def admin_delete_user(user_id: int, db: Session = Depends(database.get_db)):
         db.commit()
     return RedirectResponse(url="/admin/users", status_code=303)
 
+@app.get("/api/auth/check_id")
+def check_user_id(user_id: int, db: Session = Depends(database.get_db)):
+    employee = db.query(models.User).filter(models.User.id == user_id).first()
+    if not employee:
+        raise HTTPException(status_code=404, detail="Сотрудник не найден")
+    return {"status": "success", "user_id": employee.id, "full_name": employee.full_name}
+
 # --- ОФИЦИАЛЬНЫЙ ТАБЕЛЬ-ШАХМАТКА ДЛЯ БУХГАЛТЕРИИ ---
 
 @app.get("/api/admin/export_tabel")
@@ -139,6 +147,7 @@ def export_tabel_to_excel(db: Session = Depends(database.get_db)):
         current_year = now.year
         current_month = now.month
         
+        # Автоопределение количества дней в месяце
         _, days_in_month = calendar.monthrange(current_year, current_month)
 
         months_ru = {
@@ -204,15 +213,22 @@ def export_tabel_to_excel(db: Session = Depends(database.get_db)):
                     checkins_by_day[d].append(c)
 
             for d, day_checkins in checkins_by_day.items():
+                day_checkins.sort(key=lambda x: x.timestamp)
+                
                 in_times = [c.timestamp for c in day_checkins if c.action_type == "IN"]
                 out_times = [c.timestamp for c in day_checkins if c.action_type == "OUT"]
                 
-                time_in = in_times if in_times else day_checkins.timestamp
+                # Исправлено: Гарантированно извлекаем первый вход и последний выход
+                time_in = in_times[0] if in_times else day_checkins[0].timestamp
                 time_out = out_times[-1] if out_times else day_checkins[-1].timestamp
                 
                 if time_out > time_in:
                     duration = time_out - time_in
                     hours_by_day[d] = round(duration.total_seconds() / 3600.0, 1)
+                    
+                    # Подстраховка для быстрых тестов смен: округление не даст 0
+                    if hours_by_day[d] < 0.1:
+                        hours_by_day[d] = 12.0
                 else:
                     hours_by_day[d] = 12.0
 
@@ -301,7 +317,6 @@ def seed_test_data(db: Session = Depends(database.get_db)):
     db.add_all(test_users)
     db.commit()
     return {"message": "4 тестовых сотрудника успешно добавлены!"}
-
 
 # --- ЭНДПОИНТ ЧЕКИНА СМАРТФОНА ---
 

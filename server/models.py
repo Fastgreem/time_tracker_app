@@ -16,8 +16,11 @@ class CheckIn(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"))
     
-    # Временная метка в UTC, совместимая с Python 3.14+
-    timestamp = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc))
+    # Локальное время отметки
+    timestamp = Column(DateTime, default=lambda: datetime.datetime.now())
+    
+    # Тип отметки: "IN" или "OUT"
+    action_type = Column(String, nullable=False, default="IN")
     
     latitude = Column(Float, nullable=False)
     longitude = Column(Float, nullable=False)
