@@ -17,10 +17,9 @@ import models
 # Импортируем openpyxl для генерации Excel
 from openpyxl import Workbook
 
-# Автоматически создаем таблицы в базе данных при старте
 database.Base.metadata.create_all(bind=database.engine)
 
-app = FastAPI(title="Time Tracker API с выгрузкой в Excel")
+app = FastAPI(title="Time Tracker API (Учет времени без КТУ)")
 
 # Настройки геозоны офиса
 OFFICE_LAT = 55.7558
@@ -29,14 +28,12 @@ ALLOWED_RADIUS_METERS = 50.0
 QR_SECRET_KEY = b"SUPER_SECRET_OFFICE_KEY_123"
 
 def get_current_qr_code() -> str:
-    """Генерирует уникальный 6-значный код, меняющийся каждые 30 секунд"""
     time_window = int(time.time() // 30)
     msg = str(time_window).encode()
     sig = hmac.new(QR_SECRET_KEY, msg, hashlib.sha256).hexdigest()
     return str(int(sig, 16) % 1000000).zfill(6)
 
 def calculate_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    """Вычисляет расстояние в метрах между двумя GPS-координатами"""
     R = 6371000.0
     phi1, phi2 = math.radians(lat1), math.radians(lat2)
     delta_phi = math.radians(lat2 - lat1)
@@ -54,48 +51,42 @@ def get_office_qr():
     return {"current_qr": get_current_qr_code(), "expires_in_seconds": 30 - int(time.time() % 30)}
 
 
-# --- БЛОК ГЕНЕРАЦИИ EXCEL ДЛЯ БУХГАЛТЕРИИ ---
+# --- ОБНОВЛЕННЫЙ БЛОК EXCEL (БЕЗ КТУ) ---
 
 @app.get("/api/admin/export_tabel")
 def export_tabel_to_excel(db: Session = Depends(database.get_db)):
-    """Генерирует табель учета рабочего времени в формате Excel"""
+    """Генерирует чистый табель учета рабочего времени для бухгалтерии"""
     try:
-        # 1. Создаем простую книгу Excel
         wb = Workbook()
         ws = wb.active
-        ws.title = "Табель"
+        ws.title = "Табель посещаемости"
         
-        # Включаем принудительное отображение сетки
+        # Настройка сетки
         ws.sheet_view.showGridLines = True
         
-        # 2. Записываем простую шапку
-        ws["A1"] = "ТАБЕЛЬ УЧЕТА РАБОЧЕГО ВРЕМЕНИ И КТУ"
+        # Шапка отчета без КТУ
+        ws["A1"] = "ТАБЕЛЬ УЧЕТА РАБОЧЕГО ВРЕМЕНИ"
         ws["A2"] = f"Выгружено: {datetime.datetime.now().strftime('%d.%m.%Y %H:%M')}"
         
-        # 3. Заголовки столбцов
-        headers = ["ID", "ФИО Сотрудника", "Должность", "Кол-во чекинов", "Базовый КТУ"]
-        ws.append([])       # Пустая строка для отступа (Строка 3)
-        ws.append(headers)  # Заголовки (Строка 4)
+        # Столбцы (Колонка КТУ полностью удалена)
+        headers = ["ID", "ФИО Сотрудника", "Должность", "Кол-во отработанных дней"]
+        ws.append([])       # Строка 3 (отступ)
+        ws.append(headers)  # Строка 4 (заголовки)
 
-        # 4. Выгружаем сотрудников из базы данных
+        # Выгрузка сотрудников
         users = db.query(models.User).all()
         
         for user in users:
-            # Считаем только валидные успешные чекины сотрудника
+            # Считаем успешные дни посещения
             valid_checkins = db.query(models.CheckIn).filter(
                 models.CheckIn.user_id == user.id,
                 models.CheckIn.is_valid == True
             ).count()
-            
-            # Логика расчета базового КТУ
-            ktu = 1.0 if valid_checkins > 0 else 0.0
-            if user.role == "accountant":
-                ktu = 1.2
                 
-            # Добавляем строку данных напрямую в таблицу
-            ws.append([user.id, user.full_name, user.role, valid_checkins, ktu])
+            # Записываем только чистые данные посещаемости
+            ws.append([user.id, user.full_name, user.role, valid_checkins])
 
-        # 5. Сохраняем книгу в поток байт памяти
+        # Сохранение отчета
         file_stream = BytesIO()
         wb.save(file_stream)
         file_stream.seek(0)
@@ -109,7 +100,6 @@ def export_tabel_to_excel(db: Session = Depends(database.get_db)):
         )
         
     except Exception as e:
-        # Ловушка ошибок: если что-то пойдет не так, мы получим текстовый файл с ошибкой
         error_details = traceback.format_exc()
         error_stream = BytesIO(f"Критическая ошибка на сервере при генерации Excel:\n{error_details}".encode('utf-8'))
         error_stream.seek(0)
