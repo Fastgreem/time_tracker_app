@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+
+{% block title %}Мониторинг сотрудников{% endblock %}
+
+{% block content %}
+<div class="card shadow-sm p-4 mb-4 bg-white rounded">
+    <h2 class="mb-3 text-secondary">📊 Кто сейчас на объекте</h2>
+    <p class="text-muted">Данные обновляются в режиме реального времени на основе чекинов GPS + QR.</p>
+    
+    <div class="table-responsive">
+        <table class="table table-hover align-middle">
+            <thead class="table-dark">
+                <tr>
+                    <th>ФИО Сотрудника</th>
+                    <th>Должность</th>
+                    <th>Статус</th>
+                    <th>Последнее действие</th>
+                    <th>Время отметки</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in status_list %}
+                <tr>
+                    <td class="fw-bold">{{ item.full_name }}</td>
+                    <td><span class="badge bg-secondary">{{ item.role }}</span></td>
+                    <td>
+                        {% if item.status == "НА РАБОТЕ" %}
+                        <span class="badge bg-success p-2">🟢 НА РАБОТЕ</span>
+                        {% else %}
+                        <span class="badge bg-light text-dark border p-2">⚪ Вне объекта</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ item.last_action }}</td>
+                    <td class="text-muted">{{ item.last_time }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

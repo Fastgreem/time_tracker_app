@@ -9,20 +9,25 @@ import traceback
 from io import BytesIO
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-from fastapi import FastAPI, Depends, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, Depends, HTTPException, Form
+from fastapi.responses import StreamingResponse, RedirectResponse
+from fastapi.templating import Jinja2Templates
+from fastapi.requests import Request
 from sqlalchemy.orm import Session
 import database
 import models
 
-# Импортируем openpyxl для генерации Excel
+# openpyxl для Excel
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
 
 database.Base.metadata.create_all(bind=database.engine)
 
-app = FastAPI(title="Time Tracker API (Шахматка рабочего времени)")
+app = FastAPI(title="Time Tracker API с Веб-Админкой")
+
+# Инициализируем стандартный Jinja2Templates
+templates = Jinja2Templates(directory="templates")
 
 # Настройки геозоны офиса
 OFFICE_LAT = 55.7558
@@ -47,25 +52,93 @@ def calculate_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> fl
 
 @app.get("/")
 def read_root():
-    return {"status": "Server is running successfully!"}
+    return RedirectResponse(url="/admin/dashboard")
 
 @app.get("/api/get_office_qr")
 def get_office_qr():
     return {"current_qr": get_current_qr_code(), "expires_in_seconds": 30 - int(time.time() % 30)}
 
+# --- ВЕБ-ИНТЕРФЕЙС АДМИНИСТРАТОРА (ИСПРАВЛЕННЫЙ CONTEXT) ---
+
+@app.get("/admin/dashboard")
+def admin_dashboard(request: Request, db: Session = Depends(database.get_db)):
+    """Отображает страницу мониторинга: кто сейчас на объекте"""
+    try:
+        users = db.query(models.User).all()
+        status_list = []
+        today_start = datetime.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        
+        for user in users:
+            last_checkin = db.query(models.CheckIn).filter(
+                models.CheckIn.user_id == user.id,
+                models.CheckIn.is_valid == True,
+                models.CheckIn.timestamp >= today_start
+            ).order_by(models.CheckIn.timestamp.desc()).first()
+            
+            if last_checkin:
+                status = "НА РАБОТЕ" if last_checkin.action_type == "IN" else "Вне объекта"
+                last_action = "Вход (Начало смены)" if last_checkin.action_type == "IN" else "Выход (Конец смены)"
+                last_time = last_checkin.timestamp.strftime('%H:%M:%S')
+            else:
+                status = "Вне объекта"
+                last_action = "Нет отметок за сегодня"
+                last_time = "—"
+                
+            status_list.append({
+                "full_name": str(user.full_name),
+                "role": str(user.role),
+                "status": status,
+                "last_action": last_action,
+                "last_time": last_time
+            })
+            
+        # Исправлено: Передаем строгий контекст шаблонизатора без лишних вложений
+        return templates.TemplateResponse(request, "dashboard.html", {"status_list": status_list})
+    except Exception as e:
+        error_details = traceback.format_exc()
+        return templates.TemplateResponse(request, "dashboard.html", {"status_list": [], "error": f"{str(e)}\n{error_details}"})
+
+@app.get("/admin/users")
+def admin_users_page(request: Request, db: Session = Depends(database.get_db)):
+    """Отображает страницу со списком сотрудников"""
+    users = db.query(models.User).order_by(models.User.id.asc()).all()
+    return templates.TemplateResponse(request, "users.html", {"users": users})
+
+# --- УПРАВЛЕНИЕ БАЗОЙ ДАННЫХ ИЗ ВЕБ-ИНТЕРФЕЙСА ---
+
+@app.post("/admin/users/add")
+def admin_add_user(full_name: str = Form(...), role: str = Form(...), db: Session = Depends(database.get_db)):
+    new_user = models.User(full_name=full_name, role=role)
+    db.add(new_user)
+    db.commit()
+    return RedirectResponse(url="/admin/users", status_code=303)
+
+@app.post("/admin/users/edit/{user_id}")
+def admin_edit_user(user_id: int, role: str = Form(...), db: Session = Depends(database.get_db)):
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if user:
+        user.role = role
+        db.commit()
+    return RedirectResponse(url="/admin/users", status_code=303)
+
+@app.get("/admin/users/delete/{user_id}")
+def admin_delete_user(user_id: int, db: Session = Depends(database.get_db)):
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if user:
+        db.delete(user)
+        db.commit()
+    return RedirectResponse(url="/admin/users", status_code=303)
+
 # --- ОФИЦИАЛЬНЫЙ ТАБЕЛЬ-ШАХМАТКА ДЛЯ БУХГАЛТЕРИИ ---
 
 @app.get("/api/admin/export_tabel")
 def export_tabel_to_excel(db: Session = Depends(database.get_db)):
-    """
-    Генерирует официальный табель-шахматку учета рабочего времени по дням месяца
-    """
+    """Генерирует официальный табель-шахматку учета рабочего времени"""
     try:
         now = datetime.datetime.now()
         current_year = now.year
         current_month = now.month
         
-        # Исправлено: Сверхнадежное определение дней в месяце через модуль calendar
         _, days_in_month = calendar.monthrange(current_year, current_month)
 
         months_ru = {
@@ -78,7 +151,6 @@ def export_tabel_to_excel(db: Session = Depends(database.get_db)):
         ws.title = months_ru[current_month]
         ws.sheet_view.showGridLines = True
 
-        # Стили оформления
         font_title = Font(name="Segoe UI", size=14, bold=True, color="1F497D")
         font_header = Font(name="Segoe UI", size=10, bold=True, color="FFFFFF")
         font_data = Font(name="Segoe UI", size=10)
@@ -95,15 +167,13 @@ def export_tabel_to_excel(db: Session = Depends(database.get_db)):
         align_center = Alignment(horizontal="center", vertical="center")
         align_left = Alignment(horizontal="left", vertical="center")
 
-        # Шапка документа
         ws["A1"] = 'Проект: "Николь-Плаза"'
         ws["A1"].font = font_title
         ws["A2"] = f"{months_ru[current_month]} {current_year}"
         ws["A2"].font = Font(name="Segoe UI", size=12, bold=True)
 
-        # Формируем заголовки столбцов
         headers = ["Сотрудник ФИО", "Должность"] + [str(d) for d in range(1, days_in_month + 1)] + ["кол-во часов", "кол-во дней"]
-        ws.append([])  # Пустая строка для отступа
+        ws.append([])
         ws.append(headers)
 
         total_columns = len(headers)
@@ -113,9 +183,8 @@ def export_tabel_to_excel(db: Session = Depends(database.get_db)):
             cell.fill = fill_header
             cell.alignment = align_center
             cell.border = thin_border
-        ws.row_dimensions[4].height = 25
+        ws.row_dimensions.height = 25
 
-        # Заполнение сетки сотрудниками
         users = db.query(models.User).all()
         current_row = 5
 
@@ -134,25 +203,23 @@ def export_tabel_to_excel(db: Session = Depends(database.get_db)):
                         checkins_by_day[d] = []
                     checkins_by_day[d].append(c)
 
-            # Расчет разницы между IN и OUT
             for d, day_checkins in checkins_by_day.items():
                 in_times = [c.timestamp for c in day_checkins if c.action_type == "IN"]
                 out_times = [c.timestamp for c in day_checkins if c.action_type == "OUT"]
                 
-                time_in = in_times[0] if in_times else day_checkins[0].timestamp
+                time_in = in_times if in_times else day_checkins.timestamp
                 time_out = out_times[-1] if out_times else day_checkins[-1].timestamp
                 
                 if time_out > time_in:
                     duration = time_out - time_in
                     hours_by_day[d] = round(duration.total_seconds() / 3600.0, 1)
                 else:
-                    hours_by_day[d] = 12.0  # Дефолтная рабочая смена
+                    hours_by_day[d] = 12.0
 
             row_data = [user.full_name, user.role]
             for d in range(1, days_in_month + 1):
                 row_data.append(hours_by_day[d])
 
-            # Буквенные диапазоны для формул строки
             first_day_col = "C"
             last_day_col = get_column_letter(2 + days_in_month)
             
@@ -172,7 +239,6 @@ def export_tabel_to_excel(db: Session = Depends(database.get_db)):
             ws.row_dimensions[current_row].height = 20
             current_row += 1
 
-        # Строка итогов по всему объекту
         ws.cell(row=current_row, column=2, value="Итого часов по дням:").font = font_total
         ws.cell(row=current_row, column=2).alignment = Alignment(horizontal="right")
         
@@ -194,7 +260,6 @@ def export_tabel_to_excel(db: Session = Depends(database.get_db)):
             cell.border = thin_border
         ws.row_dimensions[current_row].height = 22
 
-        # Сетка ширины колонок
         ws.column_dimensions["A"].width = 32
         ws.column_dimensions["B"].width = 16
         for d in range(1, days_in_month + 1):
@@ -223,19 +288,6 @@ def export_tabel_to_excel(db: Session = Depends(database.get_db)):
             headers={"Content-Disposition": "attachment; filename=server_error_log.txt"}
         )
 
-# --- ЭНДПОИНТЫ АДМИНИСТРИРОВАНИЯ ---
-
-@app.post("/api/admin/create_user")
-def create_user(full_name: str, role: str = "employee", db: Session = Depends(database.get_db)):
-    existing_user = db.query(models.User).filter(models.User.full_name == full_name).first()
-    if existing_user:
-        raise HTTPException(status_code=400, detail="Сотрудник с таким ФИО уже зарегистрирован")
-    new_user = models.User(full_name=full_name, role=role)
-    db.add(new_user)
-    db.commit()
-    db.refresh(new_user)
-    return {"message": "Сотрудник успешно создан!", "user_id": new_user.id}
-
 @app.post("/api/admin/seed_test_data")
 def seed_test_data(db: Session = Depends(database.get_db)):
     if db.query(models.User).count() > 0:
@@ -244,11 +296,12 @@ def seed_test_data(db: Session = Depends(database.get_db)):
         models.User(full_name="Иванов И. И.", role="ст.кладовщик"),
         models.User(full_name="Петров П. Р.", role="кладовщик"),
         models.User(full_name="Сидоров И. В.", role="комплектовщик"),
-        models.User(full_name="Смирнова А. С.", role="accountant")
+        models.User(full_name="Смирнова А. С.", role="бухгалтер")
     ]
     db.add_all(test_users)
     db.commit()
-    return {"message": "4 тестовых сотрудника успешно добавлены в базу!"}
+    return {"message": "4 тестовых сотрудника успешно добавлены!"}
+
 
 # --- ЭНДПОИНТ ЧЕКИНА СМАРТФОНА ---
 
@@ -256,7 +309,7 @@ def seed_test_data(db: Session = Depends(database.get_db)):
 def employee_checkin(user_id: int, lat: float, lon: float, qr_code: str, action_type: str = "IN", db: Session = Depends(database.get_db)):
     employee = db.query(models.User).filter(models.User.id == user_id).first()
     if not employee:
-        raise HTTPException(status_code=404, detail="Ошибка: Сотрудник с таким ID не найден в системе!")
+        raise HTTPException(status_code=404, detail="Ошибка: Сотрудник не найден в системе!")
     if action_type not in ["IN", "OUT"]:
         raise HTTPException(status_code=400, detail="Допустимы только 'IN' или 'OUT'")
     if not (-90 <= lat <= 90) or not (-180 <= lon <= 180):
@@ -283,6 +336,6 @@ def employee_checkin(user_id: int, lat: float, lon: float, qr_code: str, action_
     if not is_gps_valid:
         raise HTTPException(status_code=400, detail="Вы слишком далеко от офиса!")
     if not is_qr_valid:
-        raise HTTPException(status_code=400, detail="Действие QR-кода истекло! Отсканируйте свежий код.")
+        raise HTTPException(status_code=400, detail="Действие QR-кода истекло!")
     
     return {"message": f"Привет, {employee.full_name}! Чекин успешно пройден.", "checkin_id": new_checkin.id}

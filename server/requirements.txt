@@ -6,3 +6,4 @@ openpyxl
 apscheduler
 pydantic
 python-multipart
+pandas
